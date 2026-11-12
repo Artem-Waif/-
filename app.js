@@ -43,7 +43,7 @@ async function loadAllOsmStations(){
 }
 
 const photoCacheKey='uzStationPhotos_v1';
-function normPhotoText(v){return String(v||'').toLocaleLowerCase('uk').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zа-яіїєґ0-9]+/gi,' ').trim();}
+function normPhotoText(v){return String(v||'').toLocaleLowerCase('uk').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zа-яіїєґ0-9]+/gi,' ').trim();}\nfunction latinPhotoText(v){const map={а:'a',б:'b',в:'v',г:'h',ґ:'g',д:'d',е:'e',є:'ye',ж:'zh',з:'z',и:'y',і:'i',ї:'yi',й:'i',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'kh',ц:'ts',ч:'ch',ш:'sh',щ:'shch',ь:'',ю:'yu',я:'ya'};return String(v||'').toLocaleLowerCase('uk').split('').map(ch=>map[ch]??ch).join('');}
 function photoAttribution(info){
   const m=info.extmetadata||{};
   const plain=x=>String(x?.value||'').replace(/<[^>]*>/g,' ').replace(/&amp;/g,'&').trim();
@@ -56,17 +56,18 @@ async function findStationPhoto(s){
   const cached=photoResults[s.id];
   if(cached){Object.assign(s,cached);return s;}
   const stationName=s.name||'',city=s.city||'';
+  const stationLatin=latinPhotoText(stationName),cityLatin=latinPhotoText(city);
   const query='"'+stationName+'" '+city+' railway station';
-  const api='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch='+encodeURIComponent(query)+'&gsrnamespace=6&gsrlimit=8&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=1000&format=json&origin=*';
+  const api='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch='+encodeURIComponent(query+' OR '+stationLatin+' '+cityLatin+' railway station')+'&gsrnamespace=6&gsrlimit=12&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=1000&format=json&origin=*';
   try{
     const response=await fetch(api,{headers:{'Accept':'application/json'}});
     if(!response.ok)throw new Error('Commons HTTP '+response.status);
     const json=await response.json();
     const pages=Object.values(json.query?.pages||{});
-    const stationN=normPhotoText(stationName),cityN=normPhotoText(city);
+    const stationN=normPhotoText(stationName),cityN=normPhotoText(city),stationL=normPhotoText(stationLatin),cityL=normPhotoText(cityLatin);
     const candidates=pages.map(p=>({p,info:p.imageinfo?.[0],title:normPhotoText(p.title)})).filter(x=>x.info?.thumburl||x.info?.url);
-    const match=candidates.find(x=>x.title.includes(stationN)&&stationN.length>3)
-      ||candidates.find(x=>x.title.includes(cityN)&&/(station|railway|vokzal|залізнич|вокзал)/i.test(x.p.title));
+    const match=candidates.find(x=>(x.title.includes(stationN)||x.title.includes(stationL))&&stationN.length>3)
+      ||candidates.find(x=>(x.title.includes(cityN)||x.title.includes(cityL))&&/(station|railway|vokzal|zalizn|залізнич|вокзал)/i.test(x.p.title));
     if(!match)return s;
     const info=match.info,credit=photoAttribution(info);
     Object.assign(s,{photo:info.thumburl||info.url,photoPage:credit.page,photoAuthor:credit.author,photoLicense:credit.license,photoSource:'Wikimedia Commons'});
@@ -81,7 +82,7 @@ async function loadStationPhotos(){
   const queue=stations.filter(s=>!s.photo||String(s.photo).includes('unsplash.com'));
   for(let i=0;i<queue.length;i+=3){
     await Promise.all(queue.slice(i,i+3).map(findStationPhoto));
-    if(page==='home'&&!stationId){const grid=document.getElementById('cards');if(grid)grid.innerHTML=stations.map(card).join('');}
+    if(page==='home'&&!stationId){const grid=document.getElementById('cards');if(grid)grid.innerHTML=stations.map(card).join('');}else if(stationId&&queue.slice(i,i+3).some(s=>s.id===stationId)){renderCurrent();}
     await new Promise(resolve=>setTimeout(resolve,250));
   }
 }
