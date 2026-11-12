@@ -52,6 +52,7 @@ function photoAttribution(info){
 async function findStationPhoto(s){
   if(s.photo && !String(s.photo).includes('unsplash.com'))return s;
   if(String(s.photo||'').includes('unsplash.com'))s.photo=null;
+  if(String(s.photo||'').includes('unsplash.com'))s.photo=null;
   const cached=photoResults[s.id];
   if(cached){Object.assign(s,cached);return s;}
   const stationName=s.name||'',city=s.city||'';
