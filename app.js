@@ -2,15 +2,44 @@ const app=document.getElementById('app');
 let stations=window.STATIONS||[];
 let osmLoaded=false;
 async function loadAllOsmStations(){
-  const query='[out:json][timeout:90];area["ISO3166-1"="UA"][admin_level=2]->.ua;(nwr["railway"~"^(station|halt)$"]["station"!~"^(subway|light_rail|funicular|tram)$"](area.ua););out center tags;';
-  const endpoints=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
-  let data=null;
-  for(const endpoint of endpoints){try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),95000);const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'data='+encodeURIComponent(query),signal:controller.signal});clearTimeout(timer);if(!response.ok)throw new Error('HTTP '+response.status);data=await response.json();if(Array.isArray(data.elements))break;}catch(error){console.warn('OSM endpoint unavailable:',endpoint,error);}}
-  if(!data||!Array.isArray(data.elements))throw new Error('Не вдалося отримати список станцій OpenStreetMap');
-  const extra=data.elements.map(e=>{const t=e.tags||{};const lat=e.lat??e.center?.lat,lon=e.lon??e.center?.lon;if(!t.name||!Number.isFinite(lat)||!Number.isFinite(lon))return null;const kind=t.railway==='halt'?'Зупинний пункт':'Залізнична станція';const city=t['addr:city']||t['addr:town']||t['addr:village']||t['is_in:city']||t['is_in:town']||t['addr:municipality']||'Населений пункт не уточнено';const region=t['addr:state']||t['addr:region']||t['is_in:state']||'Область не уточнено';return {id:'osm-'+e.type+'-'+e.id,name:t.name,city,region,year:null,area:null,platforms:null,tracks:null,passengers:{day:null,week:null,month:null,year:null},depot:'Інформація про депо не внесена',depotType:'Потребує уточнення',type:kind,lat,lon,photo:null,description:kind+'. Дані назви та розташування отримані з OpenStreetMap. Додаткові характеристики потребують перевірки.',facts:['Джерело базового запису — OpenStreetMap','Тип об’єкта: '+(t.railway||'не вказано'),'Ідентифікатор OSM: '+e.type+'/'+e.id],osmUrl:'https://www.openstreetmap.org/'+e.type+'/'+e.id,source:'OpenStreetMap'};}).filter(Boolean);
+  const query='[out:json][timeout:180];area["ISO3166-1"="UA"][admin_level=2]->.ua;(nwr["railway"~"^(station|halt)$"]["station"!~"^(subway|light_rail|funicular|tram)$"](area.ua););out center tags;';
+  const endpoints=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.nchc.org.tw/api/interpreter'];
+  let data=null,lastError=null;
+  for(const endpoint of endpoints){
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),190000);
+    try{
+      const url=endpoint+'?data='+encodeURIComponent(query);
+      const response=await fetch(url,{method:'GET',headers:{'Accept':'application/json'},signal:controller.signal,cache:'no-store'});
+      if(!response.ok)throw new Error('HTTP '+response.status);
+      const result=await response.json();
+      if(!Array.isArray(result.elements))throw new Error('Некоректна відповідь OpenStreetMap');
+      data=result;
+      clearTimeout(timer);
+      break;
+    }catch(error){
+      clearTimeout(timer);
+      lastError=error;
+      console.warn('Не вдалося отримати дані з '+endpoint,error);
+    }
+  }
+  if(!data)throw lastError||new Error('Сервіси OpenStreetMap тимчасово недоступні');
+  const extra=data.elements.map(e=>{
+    const t=e.tags||{},lat=e.lat??e.center?.lat,lon=e.lon??e.center?.lon;
+    if(!t.name||!Number.isFinite(lat)||!Number.isFinite(lon))return null;
+    const kind=t.railway==='halt'?'Зупинний пункт':'Залізнична станція';
+    const city=t['addr:city']||t['addr:town']||t['addr:village']||t['is_in:city']||t['is_in:town']||t['addr:municipality']||'Населений пункт не уточнено';
+    const region=t['addr:state']||t['addr:region']||t['is_in:state']||'Область не уточнено';
+    return {id:'osm-'+e.type+'-'+e.id,name:t.name,city,region,year:null,area:null,platforms:null,tracks:null,passengers:{day:null,week:null,month:null,year:null},depot:'Інформація про депо не внесена',depotType:'Потребує уточнення',type:kind,lat,lon,photo:null,description:kind+'. Назва та розташування отримані з OpenStreetMap. Додаткові характеристики потребують перевірки.',facts:['Джерело базового запису — OpenStreetMap','Тип об’єкта: '+(t.railway||'не вказано'),'Ідентифікатор OSM: '+e.type+'/'+e.id],osmUrl:'https://www.openstreetmap.org/'+e.type+'/'+e.id,source:'OpenStreetMap'};
+  }).filter(Boolean);
   const seen=new Set(stations.map(x=>x.name.trim().toLocaleLowerCase('uk')+'|'+Math.round(x.lat*1000)+'|'+Math.round(x.lon*1000)));
-  for(const item of extra){const key=item.name.trim().toLocaleLowerCase('uk')+'|'+Math.round(item.lat*1000)+'|'+Math.round(item.lon*1000);if(!seen.has(key)){stations.push(item);seen.add(key);}}
-  osmLoaded=true;return extra.length;
+  let added=0;
+  for(const item of extra){
+    const key=item.name.trim().toLocaleLowerCase('uk')+'|'+Math.round(item.lat*1000)+'|'+Math.round(item.lon*1000);
+    if(!seen.has(key)){stations.push(item);seen.add(key);added++;}
+  }
+  osmLoaded=true;
+  return {received:extra.length,added,total:stations.length};
 }
 const qs=new URLSearchParams(location.search);
 const page=qs.get('page')||'home';
@@ -27,7 +56,7 @@ function mapPage(){app.innerHTML=shellHero('Мапа вокзалів','Геог
 function historyPage(){app.innerHTML=shellHero('Історія залізничних вокзалів','Як розвивалася залізнична мережа та вокзальна архітектура на території України.')+'<div class="wrap"><div class="panel"><h2>Залізниця як частина історії України</h2><p>Розвиток залізничного транспорту на українських землях відбувався поступово, а вокзали ставали важливими громадськими просторами. Вони поєднували функції транспортного вузла, архітектурної споруди та місця зустрічей і подорожей.</p><p>У різні історичні періоди вокзальні будівлі змінювалися: з’являлися нові зали очікування, платформи, колійне господарство та засоби обслуговування пасажирів. Частина історичних споруд зберегла архітектурні риси свого часу, інші були перебудовані або модернізовані.</p></div><div class="section-head"><div><h2>Що досліджувати</h2><p>Теми для доповнення історичного розділу</p></div></div><div class="depot-grid">'+[['Перші залізниці','Поява залізничних ліній і перших вокзальних споруд на українських землях.'],['Архітектура','Історичні стилі, фасади, зали очікування та інженерні рішення.'],['Розвиток мережі','Формування великих залізничних вузлів і сполучення між містами.'],['Сучасність','Відновлення, модернізація та доступність вокзалів для пасажирів.']].map(x=>'<div class="depot"><h3>'+x[0]+'</h3><p>'+x[1]+'</p></div>').join('')+'</div></div>'}
 function renderCurrent(){if(stationId)detail();else if(page==='rankings')rankings();else if(page==='depots')depots();else if(page==='map')mapPage();else if(page==='history')historyPage();else home();}
 renderCurrent();
-{const status=document.createElement('div');status.id='osmStatus';status.className='notice';status.style.cssText='max-width:1180px;margin:18px auto;padding:12px 18px';status.textContent='Завантажуємо повний перелік станцій і зупинок з OpenStreetMap…';app.prepend(status);loadAllOsmStations().then(count=>{renderCurrent();const note=document.createElement('div');note.className='notice';note.style.cssText='max-width:1180px;margin:0 auto 24px;padding:12px 18px';note.textContent='Джерело каталогу: OpenStreetMap. Завантажено '+count.toLocaleString('uk-UA')+' записів станцій і зупинок; показано '+stations.length.toLocaleString('uk-UA')+' унікальних об’єктів з урахуванням початкового каталогу. Дані OSM постійно уточнюються та не є офіційним реєстром Укрзалізниці.';app.append(note);}).catch(error=>{status.textContent='Не вдалося автоматично завантажити повний перелік з OpenStreetMap. Показано початковий список. Перевірте підключення до інтернету й оновіть сторінку.';console.error(error);});}
+{const status=document.createElement('div');status.id='osmStatus';status.className='notice';status.style.cssText='max-width:1180px;margin:18px auto;padding:12px 18px';status.textContent='Завантажуємо повний перелік станцій і зупинок з OpenStreetMap…';app.prepend(status);loadAllOsmStations().then(result=>{renderCurrent();const note=document.createElement('div');note.className='notice';note.style.cssText='max-width:1180px;margin:0 auto 24px;padding:12px 18px';note.textContent='OpenStreetMap: отримано '+result.received.toLocaleString('uk-UA')+' записів; додано '+result.added.toLocaleString('uk-UA')+' нових об’єктів. Усього в каталозі: '+result.total.toLocaleString('uk-UA')+'. Дані OSM не є офіційним реєстром Укрзалізниці.';app.append(note);}).catch(error=>{status.textContent='Не вдалося завантажити дані OpenStreetMap. Залишено початкові 8 записів. Причина: '+(error?.message||'невідома помилка')+'. Спробуйте оновити сторінку пізніше.';console.error(error);});}
 
 document.querySelectorAll('nav a').forEach(a=>{if((page==='home'&&!stationId&&a.dataset.page==='home')||a.href.includes('page='+page))a.classList.add('active')});
 document.getElementById('menuToggle')?.addEventListener('click',()=>document.getElementById('mainNav').classList.toggle('open'));
